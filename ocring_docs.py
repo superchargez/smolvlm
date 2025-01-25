@@ -52,9 +52,12 @@ def convert_pdf_to_png_bytes(pdf_content):
     try:
         pdf_document = fitz.open(stream=io.BytesIO(pdf_content), filetype='pdf')
         page = pdf_document[0]  # Get the first page
-        pix = page.get_pixmap()
-        if pix.colorspace is not None and pix.colorspace.name != "RGB": # Check if colorspace exists and is not RGB
-            pix = pix.conver_to_rgb() # Convert to RGB if not already
+        pix = page.get_pixmap(dpi=300)  # Specify DPI for better quality
+        
+        # Ensure the pixmap is in RGB format
+        if pix.n < 3:  # If less than 3 color channels
+            pix = fitz.Pixmap(pix, 0)  # Convert to RGB
+        
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         png_buffer = io.BytesIO()
         img.save(png_buffer, format="PNG")
@@ -191,7 +194,6 @@ async def describe_file_endpoint(request: Request, background_tasks: BackgroundT
     if not mime_type.startswith("image/") and mime_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image or PDF.")
 
-
     task_id = str(uuid.uuid4())
     task_results[task_id] = {
         "id": task_id,
@@ -248,4 +250,4 @@ async def get_task_status(task_id: str):
 
 @app.get("/health/")
 def health():
-    return "VLM is running fine!"
+    return "VLM is running fine. OCR is ready!"
