@@ -12,6 +12,7 @@ from datetime import datetime
 import fitz  # PyMuPDF
 import pypandoc
 import os
+import logging # Import logging
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -28,6 +29,9 @@ app = FastAPI(title="Image to Text with SmolVLM")
 
 # In-memory storage for task status and results
 task_results = {}
+
+# Configure logging
+logging.basicConfig(level=logging.ERROR) # Set logging level to ERROR or higher
 
 def resize_image_if_needed(image):
     """
@@ -68,34 +72,83 @@ def convert_pdf_to_png_bytes(pdf_content):
     except Exception as e:
         raise Exception(f"Error converting PDF to PNG: {str(e)}")
 
+from subprocess import Popen, PIPE
+
 def convert_docx_to_pdf_bytes(docx_content, filename="document.docx"):
-    """
-    Converts DOCX content to PDF content in bytes using pypandoc.
-    """
+    """Converts DOCX content to PDF content in bytes using LibreOffice."""
     try:
         docx_temp_file = f"/tmp/{filename}"
+        # Construct pdf_temp_file based on the input filename, in /tmp directory
+        pdf_filename_base = os.path.splitext(filename)[0] # Get filename without extension
+        pdf_temp_file = f"/tmp/{pdf_filename_base}.pdf"  # Expected PDF path
+
         with open(docx_temp_file, "wb") as f:
             f.write(docx_content)
-        pdf_content = pypandoc.convert_file(docx_temp_file, 'pdf', format='docx')
-        os.remove(docx_temp_file) # Clean up temp file
-        return pdf_content.encode('utf-8') # Return PDF content as bytes
+
+        process = Popen([
+            "libreoffice", "--headless", "--convert-to", "pdf", "--outdir", "/tmp", docx_temp_file
+        ], stdout=PIPE, stderr=PIPE)
+        stdout, stderr = process.communicate()
+
+        if process.returncode != 0:
+            error_message = f"LibreOffice conversion failed with code {process.returncode}: {stderr.decode()}"
+            logging.error(error_message)
+            raise Exception(error_message)
+
+        # Check for the CORRECTLY NAMED PDF file
+        if not os.path.exists(pdf_temp_file): # Now checking for the filename based on input
+            error_message = f"PDF output file not found at expected path: {pdf_temp_file}" # More specific error message
+            logging.error(error_message)
+            raise Exception(error_message)
+
+        with open(pdf_temp_file, "rb") as pdf_file:
+            pdf_content = pdf_file.read()
+
+        os.remove(docx_temp_file)
+        # os.remove(pdf_temp_file) # Keep commented out for debugging temporarily
+
+        return pdf_content
     except Exception as e:
         raise Exception(f"Error converting DOCX to PDF: {str(e)}")
 
+
 def convert_pptx_to_pdf_bytes(pptx_content, filename="presentation.pptx"):
-    """
-    Converts PPTX content to PDF content in bytes using pypandoc.
-    """
+    """Converts PPTX content to PDF content in bytes using LibreOffice."""
     try:
         pptx_temp_file = f"/tmp/{filename}"
+        # Construct pdf_temp_file based on the input filename
+        pdf_filename_base = os.path.splitext(filename)[0] # Get filename without extension
+        pdf_temp_file = f"/tmp/{pdf_filename_base}.pdf" # Expected PDF path
+
         with open(pptx_temp_file, "wb") as f:
             f.write(pptx_content)
-        pdf_content = pypandoc.convert_file(pptx_temp_file, 'pdf', format='pptx')
-        os.remove(pptx_temp_file) # Clean up temp file
-        return pdf_content.encode('utf-8') # Return PDF content as bytes
+
+        process = Popen([
+            "libreoffice", "--headless", "--convert-to", "pdf", "--outdir", "/tmp", pptx_temp_file
+        ], stdout=PIPE, stderr=PIPE)
+        stdout, stderr = process.communicate()
+
+        if process.returncode != 0:
+            error_message = f"LibreOffice conversion failed with code {process.returncode}: {stderr.decode()}"
+            logging.error(error_message)
+            raise Exception(error_message)
+
+        # Check for the CORRECTLY NAMED PDF file
+        if not os.path.exists(pdf_temp_file): # Now checking for filename based on input
+            error_message = f"PDF output file not found at expected path: {pdf_temp_file}" # More specific error message
+            logging.error(error_message)
+            raise Exception(error_message)
+
+
+        with open(pdf_temp_file, "rb") as pdf_file:
+            pdf_content = pdf_file.read()
+
+        os.remove(pptx_temp_file)
+        # os.remove(pdf_temp_file) # Keep commented out for debugging temporarily
+
+        return pdf_content
     except Exception as e:
         raise Exception(f"Error converting PPTX to PDF: {str(e)}")
-
 
 def process_image_description(file_content, task_id, filename, mime_type, size_bytes):
     """
@@ -229,19 +282,35 @@ def process_image_description(file_content, task_id, filename, mime_type, size_b
             }
         }
 
+import mimetypes
+
 @app.post("/describe_file/")
 async def describe_file_endpoint(request: Request, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     start_request_time = time()
     start_datetime_request = datetime.utcnow().isoformat() + 'Z'
+
+    # Determine MIME type
     mime_type = file.content_type
+    if mime_type == "application/octet-stream":  # Handle incorrect MIME type
+        mime_type, _ = mimetypes.guess_type(file.filename)
+        if not mime_type:
+            mime_type = "application/octet-stream"  # Default fallback if guessing fails
+
     filename = file.filename
 
-    allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "application/pdf",
-                          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                          "application/vnd.openxmlformats-officedocument.presentationml.presentation"]
+    # Simplified allowed mime types check
+    allowed_mime_types = [
+        "image/png", "image/jpeg", "image/webp", "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    ]
 
-    if mime_type not in allowed_mime_types and not mime_type.startswith("image/"): # To broadly allow all image types if some new image mime is used
-        raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image, PDF, DOCX, or PPTX.")
+    # Simplified validation
+    if not any([
+        mime_type in allowed_mime_types,
+        mime_type.startswith("image/"),
+    ]):
+        raise HTTPException(status_code=400, detail=f"Invalid file type: {mime_type}. Please upload an image, PDF, DOCX, or PPTX.")
 
     task_id = str(uuid.uuid4())
     task_results[task_id] = {
@@ -250,7 +319,7 @@ async def describe_file_endpoint(request: Request, background_tasks: BackgroundT
         "created": start_datetime_request,
         "model": "HuggingFaceTB/SmolVLM-256M-Instruct",
         "task_status": "processing",
-    } # Initial status
+    }
 
     file_content = await file.read()
     size_bytes = len(file_content)
@@ -283,11 +352,11 @@ async def describe_file_endpoint(request: Request, background_tasks: BackgroundT
                 "mime_type": mime_type,
                 "size_bytes": size_bytes,
             }
-            # "client_ip": request.client.host # You can add this, but consider privacy implications
         }
     }
 
     return JSONResponse(content=initial_response_payload)
+
 
 @app.get("/task_status/{task_id}")
 async def get_task_status(task_id: str):
