@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>File Information Extractor</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        #result-container { margin-top: 20px; border: 1px solid #ccc; padding: 10px; }
+        .status-processing { color: orange; }
+        .status-completed { color: green; }
+        .status-error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>File Information Extractor</h1>
+
+    <input type="file" id="fileInput" name="file">
+    <button onclick="uploadFile()">Describe File</button>
+
+    <div id="result-container">
+        <p id="status">Waiting for file upload...</p>
+        <div id="task-details" style="display: none;">
+            <h2>Task Details:</h2>
+            <p><b>Task ID:</b> <span id="task-id-display"></span></p>
+            <p><b>Status:</b> <span id="task-status-display"></span></p>
+            <p><b>Description:</b> <span id="description-display"></span></p>
+            <div id="processing-details" style="display: none;">
+                <h3>Processing Details:</h3>
+                <p><b>Start Time:</b> <span id="start-time-display"></span></p>
+                <p><b>End Time:</b> <span id="end-time-display"></span></p>
+                <p><b>Total Time:</b> <span id="total-time-display"></span> seconds</p>
+                <p><b>Generation Time:</b> <span id="generation-time-display"></span> seconds</p>
+                <h3>File Metadata:</h3>
+                <p><b>Filename:</b> <span id="filename-display"></span></p>
+                <p><b>MIME Type:</b> <span id="mime-type-display"></span></p>
+                <p><b>Size:</b> <span id="size-display"></span> bytes</p>
+                <p><b>Original Dimensions:</b> <span id="original-dimensions-display"></span></p>
+                <p><b>Processed Dimensions:</b> <span id="processed-dimensions-display"></span></p>
+                <p><b>Processed Format:</b> <span id="processed-format-display"></span></p>
+                <p id="error-message-detail" style="color: red; display: none;"><b>Error:</b> <span id="error-display"></span></p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let taskId = null;
+        let pollingInterval = null;
+
+        async function uploadFile() {
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                alert("Please select a file.");
+                return;
+            }
+
+            document.getElementById('status').textContent = 'Uploading file...';
+            document.getElementById('task-details').style.display = 'none';
+            document.getElementById('processing-details').style.display = 'none';
+            document.getElementById('error-message-detail').style.display = 'none';
+            resetDisplay(); // Clear previous results
+
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/describe_file/', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    document.getElementById('status').textContent = `Upload failed: ${errorData.detail || response.statusText}`;
+                    document.getElementById('status').className = 'status-error';
+                    return;
+                }
+
+                const responseData = await response.json();
+                taskId = responseData.id;
+                document.getElementById('task-id-display').textContent = taskId;
+                document.getElementById('status').textContent = 'Processing file... Task ID: ' + taskId;
+                document.getElementById('status').className = 'status-processing';
+                document.getElementById('task-details').style.display = 'block';
+
+                startPollingStatus(taskId);
+
+            } catch (error) {
+                console.error("Error uploading file:", error);
+                document.getElementById('status').textContent = 'Error uploading file.';
+                document.getElementById('status').className = 'status-error';
+            }
+        }
+
+        function startPollingStatus(taskId) {
+            if (pollingInterval) {
+                clearInterval(pollingInterval); // Clear any existing interval
+            }
+            pollingInterval = setInterval(async () => {
+                const status = await getTaskStatus(taskId);
+                if (status && status.task_status !== 'processing') {
+                    clearInterval(pollingInterval); // Stop polling when processing is done
+                    pollingInterval = null; // Reset polling interval
+                }
+            }, 2000); // Poll every 2 seconds
+        }
+
+
+        async function getTaskStatus(taskId) {
+            try {
+                const response = await fetch(`/task_status/${taskId}`);
+                if (!response.ok) {
+                    console.error(`Error getting task status for task ID ${taskId}: ${response.statusText}`);
+                    return null;
+                }
+                const taskData = await response.json();
+                updateDisplay(taskData);
+                return taskData;
+            } catch (error) {
+                console.error("Error getting task status:", error);
+                return null;
+            }
+        }
+
+        function updateDisplay(taskData) {
+            document.getElementById('task-status-display').textContent = taskData.task_status;
+
+            if (taskData.task_status === 'completed') {
+                document.getElementById('status').textContent = 'Processing completed!';
+                document.getElementById('status').className = 'status-completed';
+                document.getElementById('description-display').textContent = taskData.description;
+                document.getElementById('processing-details').style.display = 'block';
+
+                // Display processing details
+                document.getElementById('start-time-display').textContent = taskData.processing_details.start_time;
+                document.getElementById('end-time-display').textContent = taskData.processing_details.end_time;
+                document.getElementById('total-time-display').textContent = taskData.processing_details.total_time_seconds;
+                document.getElementById('generation-time-display').textContent = taskData.processing_details.generation_time_seconds;
+
+                // Display file metadata
+                document.getElementById('filename-display').textContent = taskData.processing_details.file_metadata.filename;
+                document.getElementById('mime-type-display').textContent = taskData.processing_details.file_metadata.mime_type;
+                document.getElementById('size-display').textContent = taskData.processing_details.file_metadata.size_bytes;
+
+                const originalWidth = taskData.processing_details.file_metadata.original_width;
+                const originalHeight = taskData.processing_details.file_metadata.original_height;
+                document.getElementById('original-dimensions-display').textContent = originalWidth && originalHeight ? `${originalWidth}x${originalHeight}` : 'N/A';
+
+                const processedWidth = taskData.processing_details.file_metadata.processed_width;
+                const processedHeight = taskData.processing_details.file_metadata.processed_height;
+                document.getElementById('processed-dimensions-display').textContent = processedWidth && processedHeight ? `${processedWidth}x${processedHeight}` : 'N/A';
+
+                document.getElementById('processed-format-display').textContent = taskData.processing_details.file_metadata.processed_format || 'N/A';
+
+
+            } else if (taskData.task_status === 'error') {
+                document.getElementById('status').textContent = 'Processing error!';
+                document.getElementById('status').className = 'status-error';
+                document.getElementById('description-display').textContent = 'Error during processing. See details below.';
+                document.getElementById('processing-details').style.display = 'block';
+                document.getElementById('error-message-detail').style.display = 'block';
+                document.getElementById('error-display').textContent = taskData.error_message;
+
+                // Display basic file metadata even on error
+                document.getElementById('filename-display').textContent = taskData.processing_details.file_metadata.filename;
+                document.getElementById('mime-type-display').textContent = taskData.processing_details.file_metadata.mime_type;
+                document.getElementById('size-display').textContent = taskData.processing_details.file_metadata.size_bytes;
+
+
+            } else if (taskData.task_status === 'processing') {
+                document.getElementById('status').textContent = 'Processing file... Task ID: ' + taskId;
+                document.getElementById('status').className = 'status-processing';
+            }
+        }
+
+        function resetDisplay() {
+            document.getElementById('task-id-display').textContent = '';
+            document.getElementById('task-status-display').textContent = '';
+            document.getElementById('description-display').textContent = '';
+            document.getElementById('start-time-display').textContent = '';
+            document.getElementById('end-time-display').textContent = '';
+            document.getElementById('total-time-display').textContent = '';
+            document.getElementById('generation-time-display').textContent = '';
+            document.getElementById('filename-display').textContent = '';
+            document.getElementById('mime-type-display').textContent = '';
+            document.getElementById('size-display').textContent = '';
+            document.getElementById('original-dimensions-display').textContent = '';
+            document.getElementById('processed-dimensions-display').textContent = '';
+            document.getElementById('processed-format-display').textContent = '';
+            document.getElementById('error-display').textContent = '';
+            document.getElementById('error-message-detail').style.display = 'none';
+        }
+
+    </script>
+</body>
+</html>

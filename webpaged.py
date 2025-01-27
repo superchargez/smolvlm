@@ -2,7 +2,7 @@ from time import time
 import torch
 from transformers import AutoProcessor, AutoModelForVision2Seq, BitsAndBytesConfig
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from PIL import Image
 import cv2
 import numpy as np
@@ -367,3 +367,9 @@ async def get_task_status(task_id: str):
 @app.get("/health/")
 def health():
     return "VLM is running fine. OCR is ready!"
+
+@app.get("/", response_class=HTMLResponse) # New endpoint to serve index.html
+async def read_root():
+    with open("static/index.html", "r") as f: # Assuming index.html is in the same directory
+        html_content = f.read()
+    return HTMLResponse(content=html_content)
