@@ -25,7 +25,7 @@ model = AutoModelForVision2Seq.from_pretrained(
 ).to(DEVICE)
 
 app = FastAPI(title="Image to Text with SmolVLM")
-
+app = FastAPI(root_path="/textract")
 # In-memory storage for task status and results
 task_results = {}
 
@@ -368,8 +368,8 @@ async def get_task_status(task_id: str):
 def health():
     return "VLM is running fine. OCR is ready!"
 
-@app.get("/", response_class=HTMLResponse) # New endpoint to serve index.html
+@app.get("/", response_class=HTMLResponse)
 async def read_root():
-    with open("static/index.html", "r") as f: # Assuming index.html is in the same directory
+    with open("static/index.html", "r") as f:
         html_content = f.read()
     return HTMLResponse(content=html_content)
